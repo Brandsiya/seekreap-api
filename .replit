@@ -1,0 +1,24 @@
+language = "nodejs"
+run = "npm start"  # Changed from npm start
+
+
+[nix]
+channel = "stable-24_11"
+packages = ["nodejs_22"]
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["npm", "start"]
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "package.json", "tsconfig.json"]
+
+[env]
+NODE_ENV = "development"
+
+[agent]
+expertMode = true
+
+[[ports]]
+localPort = 3001
+externalPort = 80

@@ -1,0 +1,137 @@
+import type { EngagementEvents } from '../domain/engagement/events';
+import type { VerificationOutcome } from '../domain/verification/verification';
+
+export type SessionState = 
+  | 'initialized'
+  | 'active'
+  | 'suspended'
+  | 'completed'
+  | 'invalidated';
+
+export interface EngineResult {
+  sessionId: string;
+  state: SessionState;
+  outcome: VerificationOutcome;
+  riskScore: number;
+  creditsAwarded: number;
+  auditTrailId: string;
+  processedAt: Date;
+}
+
+export class VerificationEngine {
+  private currentState: SessionState = 'initialized';
+  private events: EngagementEvents[] = [];
+  
+  constructor(private readonly sessionId: string) {}
+
+  processEvent(event: EngagementEvents): EngineResult {
+    this.updateState(event);
+    const riskScore = this.calculateRisk([...this.events, event]);
+    const outcome = this.determineOutcome(riskScore);
+    const creditsAwarded = this.calculateCredits(outcome, riskScore);
+    const auditTrailId = this.generateAuditTrailId();
+    this.events.push(event);
+
+    return {
+      sessionId: this.sessionId,
+      state: this.currentState,
+      outcome,
+      riskScore,
+      creditsAwarded,
+      auditTrailId,
+      processedAt: new Date()
+    };
+  }
+
+  private updateState(event: EngagementEvents): void {
+    switch (event.type) {
+      case 'VideoStarted':
+        this.currentState = 'active';
+        break;
+      case 'VideoPaused':
+        this.currentState = 'suspended';
+        break;
+      case 'VideoResumed':
+        this.currentState = 'active';
+        break;
+    if (duration < 120000) return 0.3;
+  private updateState(event: EngagementEvents): void {
+    switch (event.type) {
+      case 'VideoStarted':
+        this.currentState = 'active';
+        break;
+      case 'VideoPaused':
+        this.currentState = 'suspended';
+        break;
+      case 'VideoResumed':
+        this.currentState = 'active';
+        break;
+      case 'VideoCompleted':
+        this.currentState = 'completed';
+        break;
+      default:
+        // For other event types like 'QuestionAnswered', don't change state
+        break;
+    }
+  }
+    return 0.1;
+  }
+
+  private determineOutcome(riskScore: number): VerificationOutcome {
+    if (riskScore > 0.8) {
+      return 'Rejected';
+    }
+    if (riskScore < 0.3) {
+      return 'Verified';
+    }
+    return 'Partial';
+  }
+
+  private calculateCredits(outcome: VerificationOutcome, riskScore: number): number {
+    if (outcome === 'Rejected') return 0;
+    if (outcome === 'Partial') return Math.max(0, 50 - Math.floor(50 * riskScore));
+    return Math.max(0, 100 - Math.floor(100 * riskScore));
+  }
+
+  private generateAuditTrailId(): string {
+    if (this.events.length === 0) {
+      return `audit_\${this.sessionId}_empty`;
+    }
+    
+    const eventHash = this.events
+      .map(e => `\${e.type}:\${e.occurredAt}:\${e.id}`)
+      .join('!');
+    
+    const hash = Buffer.from(eventHash).toString('base64').slice(0, 16);
+    return `audit_\${this.sessionId}_\${hash}`;
+  }
+
+  static reconstruct(sessionId: string, events: EngagementEvents[]): EngineResult {
+    const engine = new VerificationEngine(sessionId);
+    let lastResult: EngineResult | null = null;
+    
+    events.forEach(event => {
+      lastResult = engine.processEvent(event);
+    });
+
+    return lastResult || {
+      sessionId,
+      state: 'initialized',
+      outcome: 'Rejected',
+      riskScore: 1.0,
+      creditsAwarded: 0,
+      auditTrailId: `audit_\${sessionId}_empty`,
+      processedAt: new Date()
+    };
+  }
+
+  getCurrentState(): SessionState {
+    return this.currentState;
+  }
+
+  getEventCount(): number {
+    return this.events.length;
+  }
+}
+
+export const evaluateEngagement = VerificationEngine.reconstruct;

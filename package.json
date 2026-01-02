@@ -1,0 +1,15 @@
+{
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0"
+  },
+  "scripts": {
+    "start": "npx ts-node server.ts"
+  }
+}
