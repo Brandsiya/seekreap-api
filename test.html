@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SeekReap Phase 1 Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>SeekReap Phase 1 Authentication Test</h1>
+    
+    <div class="section">
+        <h2>1. Create Session</h2>
+        <button onclick="createSession()">Create Anonymous Session</button>
+        <div id="session-result"></div>
+    </div>
+    
+    <div class="section">
+        <h2>2. Get Verification Token</h2>
+        <button onclick="getVerificationToken()" id="token-btn" disabled>Get Verification Token</button>
+        <div id="token-result"></div>
+    </div>
+    
+    <div class="section">
+        <h2>3. Start Verification</h2>
+        <button onclick="startVerification()" id="verify-btn" disabled>Start Verification</button>
+        <div id="verification-result"></div>
+    </div>
+    
+    <div class="section">
+        <h2>4. Submit Answers</h2>
+        <button onclick="submitAnswers()" id="submit-btn" disabled>Submit Answers</button>
+        <div id="submit-result"></div>
+    </div>
+
+    <script>
+        let sessionId = '';
+        let verificationToken = '';
+        let verificationId = '';
+        const API_BASE = 'http://localhost:3000';
+        
+        async function createSession() {
+            try {
+                const response = await fetch(`${API_BASE}/api/session/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                document.getElementById('session-result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (data.success) {
+                    sessionId = data.sessionId;
+                    document.getElementById('token-btn').disabled = false;
+                    document.getElementById('session-result').innerHTML += 
+                        '<p class="success">✓ Session created!</p>';
+                }
+            } catch (error) {
+                document.getElementById('session-result').innerHTML = 
+                    `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+        
+        async function getVerificationToken() {
+            try {
+                const response = await fetch(`${API_BASE}/api/session/verification-token`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId
+                    }
+                });
+                const data = await response.json();
+                document.getElementById('token-result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (data.success) {
+                    verificationToken = data.token;
+                    document.getElementById('verify-btn').disabled = false;
+                    document.getElementById('token-result').innerHTML += 
+                        '<p class="success">✓ Token created!</p>';
+                }
+            } catch (error) {
+                document.getElementById('token-result').innerHTML = 
+                    `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+        
+        async function startVerification() {
+            try {
+                const response = await fetch(`${API_BASE}/api/verification/start`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId
+                    },
+                    body: JSON.stringify({ adId: 'test_ad_001' })
+                });
+                const data = await response.json();
+                document.getElementById('verification-result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (data.success) {
+                    verificationId = data.verificationId;
+                    document.getElementById('submit-btn').disabled = false;
+                    document.getElementById('verification-result').innerHTML += 
+                        '<p class="success">✓ Verification started!</p>';
+                }
+            } catch (error) {
+                document.getElementById('verification-result').innerHTML = 
+                    `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+        
+        async function submitAnswers() {
+            try {
+                const response = await fetch(`${API_BASE}/api/verification/submit`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId,
+                        'X-Verification-Token': verificationToken
+                    },
+                    body: JSON.stringify({ 
+                        verificationId: verificationId,
+                        answers: ['A', 'B', 'C'] // Correct answers
+                    })
+                });
+                const data = await response.json();
+                document.getElementById('submit-result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (data.success) {
+                    document.getElementById('submit-result').innerHTML += 
+                        data.result.verified ? 
+                        '<p class="success">✓ Verification successful!</p>' :
+                        '<p class="error">✗ Verification failed</p>';
+                }
+            } catch (error) {
+                document.getElementById('submit-result').innerHTML = 
+                    `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+// Add these imports at the top (after existing imports)
+import { createSession } from './services/session';
+import { requireSession } from './middleware/auth';
+
+// Add this middleware BEFORE your routes (around line where app is defined)
+app.use(requireSession);
+
+// Add this route BEFORE your other routes
+app.post('/session', (req, res) => {
+  const { token, sessionId } = createSession();
+  res.json({
+    sessionId,
+    token,
+    expiresIn: '30m',
+    limits: {
+      general: '100 requests per hour',
+      verification: '10 attempts per 15 minutes'
+    }
+  });
+});
