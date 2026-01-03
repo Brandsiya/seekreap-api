@@ -1,105 +1,113 @@
+// routes/verification.ts - Enhanced version
 import { Router } from 'express';
-import { requireSession, requireVerificationToken } from '../middleware/auth';
-import { validateAndCompleteVerification } from '../services/session';
+import { requireSession } from '../middleware/auth';
+import { EnhancedVerificationService } from '../services/enhanced-verification.service';
 
 const router = Router();
+const verificationService = new EnhancedVerificationService();
 
-// Apply session middleware to all verification routes
+// Apply session middleware
 router.use(requireSession);
 
 /**
- * Start verification process
- * POST /api/verification/start
+ * Enhanced verification endpoint
+ * POST /api/verification/complete
+ * Combines Q&A answers with engagement events
  */
-router.post('/start', (req, res) => {
-    const { adId, userId } = req.body;
-    
-    if (!adId) {
-        return res.status(400).json({
-            success: false,
-            error: 'adId is required'
-        });
-    }
-    
-    // In Phase 1, userId is optional/anon
-    const anonUserId = userId || `anon_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Store verification attempt (simplified)
-    const verificationId = `verify_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    res.json({
-        success: true,
-        verificationId,
-        userId: anonUserId,
-        nextStep: 'watch_ad', // or 'answer_questions' depending on flow
-        message: 'Verification process started'
-    });
-});
+router.post('/complete', async (req, res) => {
+  const { 
+    verificationId, 
+    adId, 
+    answers, 
+    engagementEvents = [],
+    userId = 'anonymous'
+  } = req.body;
 
-/**
- * Submit verification answers (protected with verification token)
- * POST /api/verification/submit
- */
-router.post('/submit', requireVerificationToken, (req, res) => {
-    const { verificationId, answers } = req.body;
-    const sessionId = req.sessionId;
-    const verificationToken = req.verificationToken;
-    
-    if (!verificationId || !answers) {
-        return res.status(400).json({
-            success: false,
-            error: 'verificationId and answers are required'
-        });
-    }
-    
-    // Validate and mark verification token as used
-    const isValid = validateAndCompleteVerification(verificationToken, sessionId);
-    if (!isValid) {
-        return res.status(401).json({
-            success: false,
-            error: 'Invalid or expired verification token'
-        });
-    }
-    
-    // Simple deterministic verification logic (Phase 1 spec)
-    // Fixed questions with expected answers
-    const expectedAnswers = ['A', 'B', 'C']; // Example expected answers
-    const isCorrect = JSON.stringify(answers) === JSON.stringify(expectedAnswers);
-    
-    const result = {
-        verificationId,
-        sessionId,
-        verified: isCorrect,
-        timestamp: new Date().toISOString(),
-        score: isCorrect ? 100 : 0
+  // Validate required fields
+  if (!verificationId || !adId || !answers) {
+    return res.status(400).json({
+      success: false,
+      error: 'verificationId, adId, and answers are required'
+    });
+  }
+
+  try {
+    // Process using enhanced verification service
+    const result = await verificationService.processVerification(
+      verificationId,
+      adId,
+      userId,
+      answers,
+      engagementEvents
+    );
+
+    // Format response for frontend
+    const response = {
+      success: true,
+      verificationId: result.verificationId,
+      outcome: result.finalOutcome,
+      score: Math.round(100 - (result.behavioralRiskScore * 100)),
+      qaScore: result.qaScore,
+      creditsAwarded: result.creditsAwarded,
+      details: {
+        behavioralAnalysis: {
+          riskScore: result.behavioralRiskScore,
+          engagementState: result.engagementState,
+          eventCount: result.eventCount
+        },
+        qaAnalysis: {
+          correct: result.qaCorrect,
+          total: result.qaTotal,
+          score: result.qaScore
+        },
+        combinedRisk: result.behavioralRiskScore, // Your engine's calculated risk
+        auditTrailId: result.auditTrailId
+      },
+      timestamp: result.completedAt.toISOString()
     };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Verification processing error:', error);
     
-    // Log verification result (in production, save to database)
-    console.log('Verification result:', result);
-    
-    res.json({
-        success: true,
-        result,
-        message: isCorrect ? 'Verification successful' : 'Verification failed'
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process verification',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
 });
 
 /**
- * Get verification result
- * GET /api/verification/result/:verificationId
+ * Get detailed verification results
+ * GET /api/verification/results/:verificationId
  */
-router.get('/result/:verificationId', (req, res) => {
-    const { verificationId } = req.params;
+router.get('/results/:verificationId', async (req, res) => {
+  const { verificationId } = req.params;
+  
+  try {
+    const result = await verificationService.getVerificationResult(verificationId);
     
-    // In production, fetch from database
-    // For now, return mock response
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        error: 'Verification result not found'
+      });
+    }
+    
     res.json({
-        success: true,
-        verificationId,
-        verified: Math.random() > 0.5, // 50/50 for demo
-        completed: true,
-        timestamp: new Date().toISOString()
+      success: true,
+      ...result
     });
+    
+  } catch (error) {
+    console.error('Error fetching verification result:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch verification result'
+    });
+  }
 });
 
 export default router;
