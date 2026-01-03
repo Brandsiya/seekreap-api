@@ -1,12 +1,21 @@
+// server-with-auth.ts
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { initializeDatabase } from '../database/config-sqlite';
 import { EngagementService } from '../services/engagementService';
-import { authService } from '../services/auth.service';
 import rateLimit from 'express-rate-limit';
+
+// NEW: Import session-based authentication
+import { 
+    createSessionIfMissing, 
+    requireSession,
+    sessionHealth 
+} from './middleware/session.middleware';
+import sessionRoutes from './routes/session.routes';
+import verificationRoutes from './routes/verification.routes';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,8 +28,12 @@ require('dotenv').config();
 
 // Rate limiting
 const limiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || '900000'),
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || '900000'), // 15 minutes
     max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+    keyGenerator: (req) => {
+        // Use session ID for rate limiting if available, otherwise IP
+        return req.sessionId || req.ip || 'unknown';
+    },
     message: {
         error: 'Too many requests',
         message: 'Please try again later'
@@ -47,19 +60,24 @@ app.use(helmet({
 app.use(cors({
     origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    exposedHeaders: ['X-Session-Id', 'X-Session-Created']
 }));
 
 app.use(compression());
 app.use(express.json());
 
-// Apply rate limiting to all routes
+// NEW: Session creation middleware (runs on all requests)
+app.use(createSessionIfMissing);
+
+// Apply rate limiting
 app.use(limiter);
 
-// Request logging with IP
+// Request logging with IP and session
 app.use((req: Request, res: Response, next) => {
     const ip = req.ip || req.connection.remoteAddress;
-    console.log(`${new Date().toISOString()} ${ip} ${req.method} ${req.url}`);
+    const sessionId = req.sessionId ? req.sessionId.substring(0, 8) + '...' : 'no-session';
+    console.log(`${new Date().toISOString()} ${ip} [${sessionId}] ${req.method} ${req.url}`);
     next();
 });
 
@@ -87,30 +105,41 @@ app.get('/health', async (req: Request, res: Response) => {
     }
 });
 
-// === PROTECTED ROUTES (Require API key) ===
+// NEW: Session health check
+app.get('/session/health', sessionHealth);
 
-// Apply authentication to all following routes
-app.use(authService.validateApiKey);
+// === SESSION MANAGEMENT ROUTES (Public) ===
+app.use('/session', sessionRoutes);
 
-// 2. Create new engagement (protected)
+// === VERIFICATION ROUTES (Session + Token protected) ===
+app.use('/verification', verificationRoutes);
+
+// === PROTECTED ROUTES (Require valid session) ===
+
+// Apply session validation to all engagement routes
+app.use('/engagements', requireSession);
+
+// 2. Create new engagement (protected by session)
 app.post('/engagements', async (req: Request, res: Response) => {
     try {
-        const { userId, sessionId, metadata } = req.body;
+        // Use sessionId as userId for Phase 1 anonymous sessions
+        const userId = req.sessionId; // Changed from req.body.userId
+        const { sessionId: clientSessionId, metadata } = req.body;
         
         if (!userId) {
-            return res.status(400).json({
-                error: 'Validation failed',
-                message: 'userId is required'
+            return res.status(401).json({
+                error: 'Unauthorized',
+                message: 'Valid session required'
             });
         }
         
-        const engagement = await engagementService.createEngagement(userId, sessionId, metadata);
+        const engagement = await engagementService.createEngagement(userId, clientSessionId, metadata);
         
         res.status(201).json({
             success: true,
             engagementId: engagement.id,
-            userId: engagement.userId,
-            sessionId: engagement.sessionId,
+            sessionId: engagement.userId, // This is now the anonymous session ID
+            clientSessionId: engagement.sessionId,
             createdAt: engagement.createdAt,
             message: 'Engagement created successfully'
         });
@@ -124,16 +153,26 @@ app.post('/engagements', async (req: Request, res: Response) => {
     }
 });
 
-// 3. Get engagement by ID (protected)
+// 3. Get engagement by ID (protected by session)
 app.get('/engagements/:engagementId', async (req: Request, res: Response) => {
     try {
         const { engagementId } = req.params;
+        const sessionId = req.sessionId; // Get from session middleware
+        
         const engagement = await engagementService.getEngagement(engagementId);
         
         if (!engagement) {
             return res.status(404).json({
                 error: 'Not found',
                 message: `Engagement ${engagementId} not found`
+            });
+        }
+        
+        // Optional: Verify engagement belongs to this session
+        if (engagement.userId !== sessionId) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: 'You do not have access to this engagement'
             });
         }
         
@@ -158,16 +197,26 @@ app.get('/engagements/:engagementId', async (req: Request, res: Response) => {
     }
 });
 
-// 4. Add events to engagement (protected)
+// 4. Add events to engagement (protected by session)
 app.post('/engagements/:engagementId/events', async (req: Request, res: Response) => {
     try {
         const { engagementId } = req.params;
+        const sessionId = req.sessionId;
         const events = req.body;
         
         if (!Array.isArray(events)) {
             return res.status(400).json({
                 error: 'Validation failed',
                 message: 'Request body must be an array of events'
+            });
+        }
+        
+        // Verify engagement belongs to this session
+        const engagement = await engagementService.getEngagement(engagementId);
+        if (!engagement || engagement.userId !== sessionId) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: 'You do not have access to this engagement'
             });
         }
         
@@ -193,10 +242,21 @@ app.post('/engagements/:engagementId/events', async (req: Request, res: Response
     }
 });
 
-// 5. Get engagement events (protected)
+// 5. Get engagement events (protected by session)
 app.get('/engagements/:engagementId/events', async (req: Request, res: Response) => {
     try {
         const { engagementId } = req.params;
+        const sessionId = req.sessionId;
+        
+        // Verify engagement belongs to this session
+        const engagement = await engagementService.getEngagement(engagementId);
+        if (!engagement || engagement.userId !== sessionId) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: 'You do not have access to this engagement'
+            });
+        }
+        
         const events = await engagementService.getEvents(engagementId);
         
         res.json({
@@ -221,10 +281,21 @@ app.get('/engagements/:engagementId/events', async (req: Request, res: Response)
     }
 });
 
-// 6. Get engagement statistics (protected)
+// 6. Get engagement statistics (protected by session)
 app.get('/engagements/:engagementId/stats', async (req: Request, res: Response) => {
     try {
         const { engagementId } = req.params;
+        const sessionId = req.sessionId;
+        
+        // Verify engagement belongs to this session
+        const engagement = await engagementService.getEngagement(engagementId);
+        if (!engagement || engagement.userId !== sessionId) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: 'You do not have access to this engagement'
+            });
+        }
+        
         const stats = await engagementService.getEventStats(engagementId);
         
         res.json({
@@ -242,7 +313,9 @@ app.get('/engagements/:engagementId/stats', async (req: Request, res: Response) 
     }
 });
 
-// === ADMIN ROUTES (Require admin API key) ===
+// === ADMIN ROUTES (Keep API key for admin) ===
+// You might want to keep the old authService for admin routes only
+import { authService } from '../services/auth.service';
 
 const adminAuth = (req: Request, res: Response, next: NextFunction) => {
     const apiKey = req.headers['x-api-key'];
@@ -255,7 +328,7 @@ const adminAuth = (req: Request, res: Response, next: NextFunction) => {
     next();
 };
 
-// 7. Generate new API key (admin only)
+// 7. Generate new API key (admin only - optional for Phase 1)
 app.post('/admin/generate-key', adminAuth, (req: Request, res: Response) => {
     const { prefix } = req.body;
     const newKey = authService.generateApiKey(prefix);
@@ -279,7 +352,7 @@ app.use((req: Request, res: Response) => {
 });
 
 // Error handler
-app.use((error: Error, req: Request, res: Response) => {
+app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
     console.error('Unhandled error:', error);
     res.status(500).json({
         error: 'Internal Server Error',
@@ -290,10 +363,19 @@ app.use((error: Error, req: Request, res: Response) => {
 // Initialize and start server
 async function startServer() {
     try {
-        console.log('🔐 Starting Secure SeekReap API...');
+        console.log('🔐 Starting Secure SeekReap API (Phase 1 Authentication)...');
         console.log('📁 Environment:', process.env.NODE_ENV || 'development');
-        console.log('🔑 API Key Authentication: ENABLED');
-        console.log('🚫 Rate Limiting: ENABLED');
+        console.log('👤 Authentication: ANONYMOUS SESSIONS (Redis)');
+        console.log('🚫 Rate Limiting: ENABLED (per session)');
+        console.log('🔑 Admin API Keys: ENABLED (for admin routes only)');
+        
+        // Check Redis configuration
+        if (!process.env.REDIS_URL) {
+            console.warn('⚠️  REDIS_URL not set. Sessions will not persist across restarts.');
+            console.warn('   For production, set REDIS_URL to a Redis instance.');
+        } else {
+            console.log('🗄️  Redis: CONFIGURED');
+        }
         
         // Initialize database
         await initializeDatabase();
@@ -306,8 +388,8 @@ async function startServer() {
         const server = app.listen(PORT, () => {
             console.log(`✅ Secure API running on http://localhost:${PORT}`);
             console.log(`📋 Health check: http://localhost:${PORT}/health`);
-            console.log(`🔑 Test API Key: dev_key_12345`);
-            console.log(`📈 Rate limit: ${process.env.RATE_LIMIT_MAX_REQUESTS || 100} requests per 15 minutes`);
+            console.log(`👤 Session endpoint: POST http://localhost:${PORT}/session/start`);
+            console.log(`📈 Rate limit: ${process.env.RATE_LIMIT_MAX_REQUESTS || 100} requests per 15 minutes per session`);
         });
         
         // Graceful shutdown
@@ -328,39 +410,4 @@ async function startServer() {
 // Start the server
 startServer();
 
-// === DASHBOARD ROUTES ===
-
-// 8. Get dashboard statistics (protected)
-app.get('/dashboard/stats', async (req: Request, res: Response) => {
-    try {
-        const stats = await dashboardService.getOverallStats();
-        res.json({
-            success: true,
-            ...stats
-        });
-    } catch (error) {
-        console.error('Error fetching dashboard stats:', error);
-        res.status(500).json({
-            error: 'Internal server error',
-            message: error instanceof Error ? error.message : 'Unknown error'
-        });
-    }
-});
-
-// 9. Get time-series data for charts (protected)
-app.get('/dashboard/timeseries', async (req: Request, res: Response) => {
-    try {
-        const days = parseInt(req.query.days as string) || 7;
-        const data = await dashboardService.getTimeSeriesData(days);
-        res.json({
-            success: true,
-            ...data
-        });
-    } catch (error) {
-        console.error('Error fetching time series data:', error);
-        res.status(500).json({
-            error: 'Internal server error',
-            message: error instanceof Error ? error.message : 'Unknown error'
-        });
-    }
-});
+export default app;
