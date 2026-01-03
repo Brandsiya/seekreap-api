@@ -1,83 +1,202 @@
+// routes/session.ts (updated version)
 import { Router } from 'express';
-import { createAnonymousSession, validateSession, createVerificationToken } from '../services/session';
+import { sessionService } from '../services/session-redis.service';
+import { requireSession } from '../middleware/session.middleware';
 
 const router = Router();
 
 /**
- * Start a new anonymous session
- * POST /api/session/start
+ * @route POST /session/start
+ * @description Start a new anonymous session
+ * @access Public
  */
-router.post('/start', (req, res) => {
+router.post('/start', async (req, res) => {
     try {
-        const sessionId = createAnonymousSession(
+        const { sessionId, expiresAt } = await sessionService.createSession(
             req.ip,
-            req.headers['user-agent'] || ''
+            req.headers['user-agent'],
+            req.headers['x-device-fingerprint'] as string
         );
+        
+        // Set secure cookie
+        const isProduction = process.env.NODE_ENV === 'production';
+        res.cookie('sessionId', sessionId, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? 'strict' : 'lax',
+            maxAge: 30 * 60 * 1000,
+            path: '/',
+        });
         
         res.json({
             success: true,
             sessionId,
+            expiresAt,
             expiresIn: '30 minutes',
-            message: 'Anonymous session created. Use this sessionId for subsequent requests.'
+            message: 'Use X-Session-Id header for subsequent requests'
         });
-        
-    } catch (error) {
+    } catch (error: any) {
         console.error('Session creation error:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to create session'
+            error: 'Failed to create session',
+            message: error.message
         });
     }
 });
 
 /**
- * Get verification token for a session
- * POST /api/session/verification-token
+ * @route GET /session/validate
+ * @description Validate current session
+ * @access Public (but requires session header)
  */
-router.post('/verification-token', (req, res) => {
-    const sessionId = req.headers['x-session-id'];
-    
-    if (!sessionId) {
-        return res.status(400).json({
-            success: false,
-            error: 'Session ID required in X-Session-ID header'
-        });
-    }
-    
+router.get('/validate', async (req, res) => {
     try {
-        const token = createVerificationToken(sessionId as string);
+        const sessionId = req.headers['x-session-id'] as string || 
+                         req.cookies?.sessionId;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID required',
+                message: 'Provide X-Session-Id header or sessionId cookie'
+            });
+        }
+        
+        const session = await sessionService.getSession(sessionId);
+        
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                error: 'Session not found',
+                message: 'Session may have expired'
+            });
+        }
         
         res.json({
             success: true,
-            token,
-            expiresIn: '5 minutes',
-            message: 'Use this token for verification requests. Token is single-use.'
+            session: {
+                id: session.id,
+                createdAt: session.createdAt,
+                expiresAt: session.expiresAt,
+                verificationCompleted: session.verificationCompleted,
+                hasEngagement: !!session.engagementId
+            }
         });
-        
     } catch (error: any) {
-        res.status(400).json({
+        res.status(500).json({
             success: false,
-            error: error.message || 'Failed to create verification token'
+            error: 'Session validation failed',
+            message: error.message
         });
     }
 });
 
 /**
- * Validate session (for testing)
- * GET /api/session/validate
+ * @route POST /session/end
+ * @description End current session
+ * @access Protected (requires session)
  */
-router.get('/validate', (req, res) => {
-    const sessionId = req.headers['x-session-id'];
-    
-    if (!sessionId) {
-        return res.status(400).json({
-            valid: false,
-            error: 'Session ID required'
+router.post('/end', requireSession, async (req, res) => {
+    try {
+        const deleted = await sessionService.deleteSession(req.sessionId!);
+        
+        // Clear cookie
+        res.clearCookie('sessionId');
+        
+        res.json({
+            success: deleted,
+            message: deleted ? 'Session ended successfully' : 'Session not found'
+        });
+    } catch (error: any) {
+        console.error('Session deletion error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to end session',
+            message: error.message
         });
     }
-    
-    const validation = validateSession(sessionId as string);
-    res.json(validation);
+});
+
+/**
+ * @route POST /session/verification/start
+ * @description Generate verification token for session
+ * @access Protected (requires session)
+ */
+router.post('/verification/start', requireSession, async (req, res) => {
+    try {
+        const token = await sessionService.createVerificationToken(req.sessionId!);
+        
+        res.json({
+            success: true,
+            verificationToken: token,
+            expiresIn: '5 minutes',
+            message: 'Use this token for verification endpoints'
+        });
+    } catch (error: any) {
+        res.status(400).json({
+            success: false,
+            error: 'Verification token creation failed',
+            message: error.message
+        });
+    }
+});
+
+// Keep your existing endpoints with updated paths
+router.post('/verify-token', requireSession, async (req, res) => {
+    try {
+        const { token } = req.body;
+        const sessionId = req.sessionId!;
+        
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                error: 'Token required'
+            });
+        }
+        
+        const result = await sessionService.validateAndCompleteVerification(token, sessionId);
+        
+        if (!result.valid) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid verification token'
+            });
+        }
+        
+        res.json({
+            success: true,
+            sessionId,
+            verifiedAt: new Date().toISOString()
+        });
+    } catch (error: any) {
+        console.error('Verification error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Verification failed',
+            message: error.message
+        });
+    }
+});
+
+router.post('/complete-verification', requireSession, async (req, res) => {
+    try {
+        // This endpoint might be redundant now
+        // Since validateAndCompleteVerification already completes verification
+        
+        res.json({
+            success: true,
+            message: 'Verification flow updated - use /verify-token endpoint',
+            sessionId: req.sessionId
+        });
+    } catch (error: any) {
+        console.error('Complete verification error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Complete verification failed',
+            message: error.message
+        });
+    }
 });
 
 export default router;
