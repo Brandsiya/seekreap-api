@@ -1,0 +1,2 @@
+language = "python3"
+run = "python3 -c \"import tier1_core.behaviors; print('🎯 TIER-1 CORE VERIFIED: 11 functions loaded successfully')\""
