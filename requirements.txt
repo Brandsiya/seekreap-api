@@ -1,0 +1,2 @@
+# Tier-1 Dependencies
+# Pure Python - no external dependencies
