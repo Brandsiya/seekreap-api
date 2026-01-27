@@ -31,3 +31,22 @@
 - **Third‑Party Independent**: No API keys, database connections, or external service calls
 
 ## 📁 Repository Structure
+
+## 🔒 ARCHITECTURAL LOCK NOTICE
+
+**Tier-1 is now permanently locked as of $(date -I).**
+
+This repository contains ONLY atomic, deterministic behaviors with zero semantic logic. All semantic transformation and envelope creation has been extracted to Tier-2.
+
+### LOCK CONDITIONS:
+- **Frozen:** No semantic logic may be added
+- **Stable:** All behavior signatures are final
+- **Pure:** Contains only structural transformations
+- **Non-authoritative:** No validation or correctness assertions
+
+### FOR DEVELOPMENT:
+- Use as a stable behavioral substrate
+- All semantics belong in Tier-2+
+- Changes require new tier creation
+
+**Lock Version:** v1.0.0-tier1-lock
