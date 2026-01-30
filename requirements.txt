@@ -1,8 +1,0 @@
-# Tier-1 Dependencies
-# Core Python requirements
-
-# Tier-2 Semantic Layer dependency
--e git+https://github.com/Brandsiya/SeekReap-Tier-2-Semantic.git@v0.1.0-tier2#egg=seekreap-tier2-semantic
-
-# Development dependencies (optional)
-# pytest>=7.0.0
