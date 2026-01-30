@@ -50,3 +50,24 @@ This repository contains ONLY atomic, deterministic behaviors with zero semantic
 - Changes require new tier creation
 
 **Lock Version:** v1.0.0-tier1-lock
+
+## 🏗️ TIER-1 SCOPE DECLARATION
+
+This repository contains **pure executable implementations** of the SeekReap Tier-0 Protocol.
+
+### Tier-1 Properties:
+- **Implements Tier-0 invariants** only
+- **Contains deterministic business logic** only
+- **Introduces no new protocol semantics**
+- **Non-authoritative** - Tier-0 remains normative authority
+- **Replaceable** - This implementation can be swapped
+
+### Boundary Conditions:
+- No governance, policy, or authority claims
+- No tooling, CI, infrastructure, or operations
+- No protocol redefinition or semantic extension
+- No examples masquerading as specification
+
+### Execution Surface:
+The `tier1_core/behaviors/` directory is the **only mutable surface**.
+All semantic interpretation and policy composition belongs in Tier-2+.

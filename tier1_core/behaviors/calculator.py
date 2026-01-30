@@ -24,3 +24,9 @@ def divide(a, b):
 def calculator_behavior():
     """Contract placeholder"""
     return ""
+
+# 🏗️ ARCHITECTURAL NOTE:
+# This file contains structural exemplars only.
+# These functions demonstrate Tier-1 atomic behavior patterns.
+# Real SeekReap behaviors will replace these exemplars.
+# Computation is allowed; protocol semantics are not.
